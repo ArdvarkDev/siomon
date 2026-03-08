@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{self, Stdout};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
@@ -6,15 +6,241 @@ use std::time::{Duration, Instant};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, MouseEventKind};
 use crossterm::execute;
 use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
-use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
+use ratatui::symbols;
+use ratatui::widgets::{Axis, Block, Borders, Cell, Chart, Dataset, Paragraph, Row, Table};
+use ratatui::Terminal;
 
 use crate::model::sensor::{SensorCategory, SensorId, SensorReading, SensorUnit};
+
+/// Maximum number of data points to retain per sensor for graphing.
+const GRAPH_HISTORY_LEN: usize = 300;
+
+/// Colors for graph traces (cycled through for multiple sensors).
+const GRAPH_COLORS: &[Color] = &[
+    Color::Green,
+    Color::Cyan,
+    Color::Yellow,
+    Color::Magenta,
+    Color::Red,
+    Color::Blue,
+    Color::LightGreen,
+    Color::LightCyan,
+];
+
+#[derive(Clone, Copy, PartialEq)]
+enum GraphMode {
+    Temperature,
+    Voltage,
+    Fan,
+    Power,
+}
+
+impl GraphMode {
+    fn next(self) -> Self {
+        match self {
+            Self::Temperature => Self::Voltage,
+            Self::Voltage => Self::Fan,
+            Self::Fan => Self::Power,
+            Self::Power => Self::Temperature,
+        }
+    }
+
+    fn prev(self) -> Self {
+        match self {
+            Self::Temperature => Self::Power,
+            Self::Voltage => Self::Temperature,
+            Self::Fan => Self::Voltage,
+            Self::Power => Self::Fan,
+        }
+    }
+
+    fn category(self) -> SensorCategory {
+        match self {
+            Self::Temperature => SensorCategory::Temperature,
+            Self::Voltage => SensorCategory::Voltage,
+            Self::Fan => SensorCategory::Fan,
+            Self::Power => SensorCategory::Power,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Temperature => "Temperature",
+            Self::Voltage => "Voltage",
+            Self::Fan => "Fan Speed",
+            Self::Power => "Power",
+        }
+    }
+
+    fn unit(self) -> &'static str {
+        match self {
+            Self::Temperature => "C",
+            Self::Voltage => "V",
+            Self::Fan => "RPM",
+            Self::Power => "W",
+        }
+    }
+}
+
+/// Per-sensor history ring buffer for graphing.
+struct SensorHistory {
+    data: HashMap<String, VecDeque<f64>>,
+    tick: u64,
+}
+
+impl SensorHistory {
+    fn new() -> Self {
+        Self {
+            data: HashMap::new(),
+            tick: 0,
+        }
+    }
+
+    fn push(&mut self, snapshot: &[(SensorId, SensorReading)]) {
+        self.tick += 1;
+        for (id, reading) in snapshot {
+            let key = format!("{}/{}/{}", id.source, id.chip, id.sensor);
+            let buf = self
+                .data
+                .entry(key)
+                .or_insert_with(|| VecDeque::with_capacity(GRAPH_HISTORY_LEN));
+            if buf.len() >= GRAPH_HISTORY_LEN {
+                buf.pop_front();
+            }
+            buf.push_back(reading.current);
+        }
+    }
+
+    /// Get history for sensors matching a category.
+    /// Similar sensors are averaged into groups (e.g., "DIMM Avg", "NVMe Avg").
+    fn traces_for_category(
+        &self,
+        snapshot: &[(SensorId, SensorReading)],
+        category: SensorCategory,
+    ) -> Vec<(String, Vec<(f64, f64)>)> {
+        // Collect raw per-sensor histories
+        let mut raw: Vec<(String, String, &VecDeque<f64>)> = Vec::new(); // (label, group_key, data)
+        let mut seen = HashSet::new();
+
+        for (id, reading) in snapshot {
+            if reading.category != category {
+                continue;
+            }
+            let key = format!("{}/{}/{}", id.source, id.chip, id.sensor);
+            if !seen.insert(key.clone()) {
+                continue;
+            }
+            if let Some(buf) = self.data.get(&key) {
+                if buf.is_empty() || buf.iter().all(|&v| v == 0.0) {
+                    continue;
+                }
+                let group = aggregate_key(&reading.label, &id.source, &id.chip);
+                raw.push((reading.label.clone(), group, buf));
+            }
+        }
+
+        // Group sensors by aggregate key
+        let mut groups: HashMap<String, Vec<(&str, &VecDeque<f64>)>> = HashMap::new();
+        for (label, group, buf) in &raw {
+            groups
+                .entry(group.clone())
+                .or_default()
+                .push((label.as_str(), buf));
+        }
+
+        let mut traces = Vec::new();
+        for (group_name, members) in &groups {
+            if members.len() == 1 {
+                // Single sensor — use its label directly
+                let points: Vec<(f64, f64)> = members[0]
+                    .1
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &v)| (i as f64, v))
+                    .collect();
+                traces.push((members[0].0.to_string(), points));
+            } else {
+                // Multiple sensors — average them
+                let max_len = members.iter().map(|(_, b)| b.len()).max().unwrap_or(0);
+                let mut points = Vec::with_capacity(max_len);
+                for i in 0..max_len {
+                    let mut sum = 0.0;
+                    let mut count = 0;
+                    for (_, buf) in members {
+                        if i < buf.len() {
+                            sum += buf[i];
+                            count += 1;
+                        }
+                    }
+                    if count > 0 {
+                        points.push((i as f64, sum / count as f64));
+                    }
+                }
+                let label = format!("{} ({}x avg)", group_name, members.len());
+                traces.push((label, points));
+            }
+        }
+
+        // Sort by variance (most interesting first)
+        traces.sort_by(|a, b| {
+            let variance = |pts: &[(f64, f64)]| -> f64 {
+                if pts.len() < 2 {
+                    return 0.0;
+                }
+                let mean = pts.iter().map(|p| p.1).sum::<f64>() / pts.len() as f64;
+                pts.iter().map(|p| (p.1 - mean).powi(2)).sum::<f64>() / pts.len() as f64
+            };
+            let va = variance(&a.1);
+            let vb = variance(&b.1);
+            vb.partial_cmp(&va).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        traces.truncate(6);
+        traces
+    }
+}
+
+/// Determine an aggregation key for a sensor label.
+/// Similar sensors get the same key so they can be averaged.
+fn aggregate_key(label: &str, source: &str, chip: &str) -> String {
+    let lower = label.to_lowercase();
+
+    // DIMM temperatures -> "DIMM Temp"
+    if lower.contains("dimm") && lower.contains("temp") {
+        return "DIMM Temp".into();
+    }
+    // NVMe/Composite temps -> "NVMe Temp"
+    if (source == "hwmon" && chip == "nvme") || lower.contains("nvme") {
+        return "NVMe Temp".into();
+    }
+    // Chassis fans -> "Chassis Fan"
+    if lower.starts_with("chassis fan") || lower.starts_with("cha_fan") {
+        return "Chassis Fan".into();
+    }
+    // Core frequencies -> "Core Freq"
+    if lower.starts_with("core") && lower.contains("freq") {
+        return "Core Freq".into();
+    }
+    // CPU utilization -> "CPU Util"
+    if lower.starts_with("core") && lower.contains("util") {
+        return "CPU Util".into();
+    }
+    // AUXTIN temps -> "AUXTIN"
+    if lower.starts_with("auxtin") && !lower.contains("direct") {
+        return "AUXTIN".into();
+    }
+    // PCIe slot temps -> "PCIe Temp"
+    if lower.starts_with("pcie") && lower.contains("temp") {
+        return "PCIe Temp".into();
+    }
+
+    // Default: use the full label (no aggregation)
+    label.to_string()
+}
 
 /// Run the interactive TUI sensor dashboard.
 ///
@@ -67,6 +293,11 @@ fn run_loop(
     let mut alert_engine = crate::sensors::alerts::AlertEngine::new(alert_rules);
     let mut active_alerts: Vec<String> = Vec::new();
 
+    // Graph state
+    let mut graph_visible = false;
+    let mut graph_mode = GraphMode::Temperature;
+    let mut history = SensorHistory::new();
+
     // Auto-collapse high-count groups on first render
     let mut auto_collapsed = false;
 
@@ -97,6 +328,9 @@ fn run_loop(
             }
         }
 
+        // Record sensor values for graphing
+        history.push(&snapshot);
+
         let (display_rows, group_indices) = build_rows(&snapshot, &collapsed);
         last_total_rows = display_rows.len();
 
@@ -116,6 +350,13 @@ fn run_loop(
         let elapsed_str = format_elapsed(elapsed);
         let collapsed_count = collapsed.len();
 
+        // Build graph traces if visible
+        let graph_traces = if graph_visible {
+            history.traces_for_category(&snapshot, graph_mode.category())
+        } else {
+            Vec::new()
+        };
+
         draw(
             terminal,
             display_rows,
@@ -127,6 +368,9 @@ fn run_loop(
             collapsed_count,
             &elapsed_str,
             &active_alerts,
+            graph_visible,
+            graph_mode,
+            &graph_traces,
         )?;
 
         let timeout = Duration::from_millis(poll_interval_ms);
@@ -178,6 +422,15 @@ fn run_loop(
                     KeyCode::Char('e') => {
                         // Expand all
                         collapsed.clear();
+                    }
+                    KeyCode::Char('g') => {
+                        graph_visible = !graph_visible;
+                    }
+                    KeyCode::Tab | KeyCode::Right if graph_visible => {
+                        graph_mode = graph_mode.next();
+                    }
+                    KeyCode::BackTab | KeyCode::Left if graph_visible => {
+                        graph_mode = graph_mode.prev();
                     }
                     KeyCode::PageUp => {
                         scroll_offset = scroll_offset.saturating_sub(20);
@@ -423,19 +676,33 @@ fn draw(
     collapsed_count: usize,
     elapsed_str: &str,
     active_alerts: &[String],
+    graph_visible: bool,
+    graph_mode: GraphMode,
+    graph_traces: &[(String, Vec<(f64, f64)>)],
 ) -> io::Result<()> {
     let total_groups = group_indices.len();
 
     terminal.draw(|frame| {
         let size = frame.area();
 
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
+        let constraints = if graph_visible {
+            vec![
+                Constraint::Length(3),
+                Constraint::Min(10),
+                Constraint::Percentage(35),
+                Constraint::Length(1),
+            ]
+        } else {
+            vec![
                 Constraint::Length(3),
                 Constraint::Min(1),
                 Constraint::Length(1),
-            ])
+            ]
+        };
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(constraints)
             .split(size);
 
         // Top bar
@@ -532,11 +799,144 @@ fn draw(
 
         frame.render_widget(table, chunks[1]);
 
+        // Graph pane (if visible)
+        let status_chunk = if graph_visible {
+            // Split graph area: chart on left, legend on right
+            let graph_layout = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Min(40), Constraint::Length(22)])
+                .split(chunks[2]);
+
+            // Build datasets for the chart
+            let datasets: Vec<Dataset> = graph_traces
+                .iter()
+                .enumerate()
+                .map(|(i, (label, points))| {
+                    let color = GRAPH_COLORS[i % GRAPH_COLORS.len()];
+                    // Truncate label for dataset name
+                    let short = if label.len() > 16 {
+                        format!("{}...", &label[..13])
+                    } else {
+                        label.clone()
+                    };
+                    Dataset::default()
+                        .name(short)
+                        .marker(symbols::Marker::Braille)
+                        .graph_type(ratatui::widgets::GraphType::Line)
+                        .style(Style::default().fg(color))
+                        .data(points)
+                })
+                .collect();
+
+            // Compute Y-axis bounds with padding
+            let (y_min, y_max) = graph_traces
+                .iter()
+                .flat_map(|(_, pts)| pts.iter().map(|p| p.1))
+                .fold((f64::MAX, f64::MIN), |(lo, hi), v| (lo.min(v), hi.max(v)));
+
+            let y_range = y_max - y_min;
+            let y_pad = if y_range < 1.0 { 2.0 } else { y_range * 0.1 };
+            let y_lo = if y_min == f64::MAX { 0.0 } else { (y_min - y_pad).max(0.0) };
+            let y_hi = if y_max == f64::MIN { 100.0 } else { y_max + y_pad };
+
+            let x_max = graph_traces
+                .iter()
+                .map(|(_, pts)| pts.len())
+                .max()
+                .unwrap_or(1) as f64;
+
+            // Y-axis labels: 5 evenly spaced
+            let y_step = (y_hi - y_lo) / 4.0;
+            let y_labels: Vec<ratatui::text::Span> = (0..5)
+                .map(|i| {
+                    let v = y_lo + y_step * i as f64;
+                    ratatui::text::Span::styled(
+                        format!("{:>6.1}", v),
+                        Style::default().fg(Color::DarkGray),
+                    )
+                })
+                .collect();
+
+            let mode_tabs = format!(
+                " {} ({}) | Tab/arrows: mode | g: hide ",
+                graph_mode.label(),
+                graph_mode.unit()
+            );
+
+            let chart = Chart::new(datasets)
+                .block(
+                    Block::default()
+                        .title(mode_tabs)
+                        .title_style(
+                            Style::default()
+                                .fg(Color::Cyan)
+                                .add_modifier(Modifier::BOLD),
+                        )
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(Color::DarkGray)),
+                )
+                .x_axis(
+                    Axis::default()
+                        .style(Style::default().fg(Color::DarkGray))
+                        .bounds([0.0, x_max]),
+                )
+                .y_axis(
+                    Axis::default()
+                        .style(Style::default().fg(Color::DarkGray))
+                        .labels(y_labels)
+                        .bounds([y_lo, y_hi]),
+                );
+
+            frame.render_widget(chart, graph_layout[0]);
+
+            // Legend panel
+            let mut legend_lines: Vec<ratatui::text::Line> = Vec::new();
+            for (i, (label, points)) in graph_traces.iter().enumerate() {
+                let color = GRAPH_COLORS[i % GRAPH_COLORS.len()];
+                let current = points.last().map(|p| p.1).unwrap_or(0.0);
+                let short_label = if label.len() > 14 {
+                    format!("{}...", &label[..11])
+                } else {
+                    label.clone()
+                };
+                legend_lines.push(ratatui::text::Line::from(vec![
+                    ratatui::text::Span::styled(
+                        "\u{2501}\u{2501} ",
+                        Style::default().fg(color),
+                    ),
+                    ratatui::text::Span::styled(
+                        format!("{:<14}", short_label),
+                        Style::default().fg(Color::White),
+                    ),
+                ]));
+                legend_lines.push(ratatui::text::Line::from(vec![
+                    ratatui::text::Span::styled(
+                        format!("   {:>8.1} {}", current, graph_mode.unit()),
+                        Style::default().fg(color).add_modifier(Modifier::BOLD),
+                    ),
+                ]));
+            }
+
+            let legend = Paragraph::new(legend_lines).block(
+                Block::default()
+                    .title(" Legend ")
+                    .title_style(Style::default().fg(Color::White))
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::DarkGray)),
+            );
+            frame.render_widget(legend, graph_layout[1]);
+
+            chunks[3]
+        } else {
+            chunks[2]
+        };
+
         // Bottom bar
+        let graph_hint = if graph_visible { "" } else { " | g: graph" };
         let status = if active_alerts.is_empty() {
             format!(
-                " q: quit | \u{2191}\u{2193}: navigate | Enter: toggle | c/e: collapse/expand | Sensors: {} | Samples: {}",
-                sensor_count, max_samples
+                " q: quit | \u{2191}\u{2193}: navigate | Enter: toggle | c/e: collapse/expand{} | Sensors: {} | Samples: {}",
+                graph_hint, sensor_count, max_samples
             )
         } else {
             format!(" \u{26a0} {} | {}", active_alerts.join(" | "), {
@@ -546,10 +946,13 @@ fn draw(
         let status_style = if active_alerts.is_empty() {
             Style::default().fg(Color::DarkGray).bg(Color::Black)
         } else {
-            Style::default().fg(Color::Yellow).bg(Color::DarkGray).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Yellow)
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD)
         };
         let status_bar = Paragraph::new(status).style(status_style);
-        frame.render_widget(status_bar, chunks[2]);
+        frame.render_widget(status_bar, status_chunk);
     })?;
 
     Ok(())
