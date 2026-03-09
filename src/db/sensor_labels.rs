@@ -87,6 +87,41 @@ fn builtin_labels(board: &str) -> HashMap<String, String> {
         m.insert("hwmon/nct6798/fan3".into(), "Chassis Fan 2".into());
     }
 
+    // ASRock WRX90 WS EVO (NCT6799D)
+    // Voltage mapping derived from IPMI cross-reference and rail values
+    if board.contains("WRX90") && !board.contains("WRX90E") {
+        m.insert("hwmon/nct6799/in0".into(), "Vcore".into());
+        m.insert("hwmon/nct6799/in1".into(), "VDD_18".into());
+        m.insert("hwmon/nct6799/in2".into(), "+3.3V".into());
+        m.insert("hwmon/nct6799/in3".into(), "+3.3V Standby".into());
+        m.insert("hwmon/nct6799/in4".into(), "VDD_SOC".into());
+        m.insert("hwmon/nct6799/in5".into(), "VDD_18_2".into());
+        m.insert("hwmon/nct6799/in7".into(), "+3.3V AUX".into());
+        m.insert("hwmon/nct6799/in8".into(), "Vbat".into());
+        m.insert("hwmon/nct6799/in9".into(), "VTT".into());
+        m.insert("hwmon/nct6799/in12".into(), "VDD_SOC2".into());
+        m.insert("hwmon/nct6799/in13".into(), "VDDIO".into());
+        m.insert("hwmon/nct6799/temp1".into(), "System".into());
+        m.insert("hwmon/nct6799/fan1".into(), "CPU Fan 1".into());
+        m.insert("hwmon/nct6799/fan2".into(), "CPU Fan 2".into());
+        m.insert("hwmon/nct6799/fan4".into(), "Chassis Fan".into());
+        m.insert("hwmon/nct6799/fan6".into(), "MOS Fan 1".into());
+        m.insert("hwmon/nct6799/fan7".into(), "MOS Fan 2".into());
+        // superio labels (same chip, different source name with --direct-io)
+        m.insert("superio/nct6799/vin0".into(), "Vcore".into());
+        m.insert("superio/nct6799/vin1".into(), "VDD_18".into());
+        m.insert("superio/nct6799/vin2".into(), "+3.3V".into());
+        m.insert("superio/nct6799/vin3".into(), "+3.3V Standby".into());
+        m.insert("superio/nct6799/vin4".into(), "VDD_SOC".into());
+        m.insert("superio/nct6799/vin5".into(), "VDD_18_2".into());
+        m.insert("superio/nct6799/vin7".into(), "+3.3V AUX".into());
+        m.insert("superio/nct6799/fan1".into(), "CPU Fan 1".into());
+        m.insert("superio/nct6799/fan2".into(), "CPU Fan 2".into());
+        m.insert("superio/nct6799/fan4".into(), "Chassis Fan".into());
+        m.insert("superio/nct6799/fan6".into(), "MOS Fan 1".into());
+        m.insert("superio/nct6799/fan7".into(), "MOS Fan 2".into());
+    }
+
     m
 }
 
@@ -114,6 +149,17 @@ mod tests {
         let labels = builtin_labels("Pro WS WRX90E-SAGE SE");
         assert_eq!(labels.get("hwmon/nct6798/in0").unwrap(), "Vcore");
         assert_eq!(labels.get("hwmon/nct6798/fan7").unwrap(), "AIO Pump");
+    }
+
+    #[test]
+    fn test_builtin_labels_asrock_wrx90() {
+        let labels = builtin_labels("WRX90 WS EVO");
+        assert_eq!(labels.get("hwmon/nct6799/in0").unwrap(), "Vcore");
+        assert_eq!(labels.get("hwmon/nct6799/fan1").unwrap(), "CPU Fan 1");
+        assert_eq!(labels.get("superio/nct6799/vin0").unwrap(), "Vcore");
+        assert_eq!(labels.get("superio/nct6799/fan6").unwrap(), "MOS Fan 1");
+        // Should NOT match ASUS WRX90E labels
+        assert!(!labels.contains_key("hwmon/nct6798/in0"));
     }
 
     #[test]

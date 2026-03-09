@@ -4,6 +4,8 @@
 //! hardware monitoring registers via I/O port address/data pairs, bypassing
 //! the kernel hwmon driver entirely. Requires root or CAP_SYS_RAWIO.
 
+use std::collections::HashMap;
+
 use crate::db::voltage_scaling::{self, VoltageChannel};
 use crate::model::sensor::{SensorCategory, SensorId, SensorReading, SensorUnit};
 use crate::platform::sinfo_io::HwmAccess;
@@ -96,6 +98,7 @@ pub struct Nct67xxSource {
     chip: SuperIoChip,
     board_name: Option<String>,
     hwm_access: Option<HwmAccess>,
+    label_overrides: HashMap<String, String>,
 }
 
 impl Nct67xxSource {
@@ -103,7 +106,7 @@ impl Nct67xxSource {
     ///
     /// Tries to open the sinfo_io kernel module for atomic register access,
     /// falling back to /dev/port if unavailable.
-    pub fn new(chip: SuperIoChip) -> Self {
+    pub fn new(chip: SuperIoChip, label_overrides: &HashMap<String, String>) -> Self {
         let board_name = crate::db::sensor_labels::read_board_name();
         let hwm_access = HwmAccess::open(chip.hwm_base);
         if let Some(ref access) = hwm_access {
@@ -118,6 +121,7 @@ impl Nct67xxSource {
             chip,
             board_name,
             hwm_access,
+            label_overrides: label_overrides.clone(),
         }
     }
 
@@ -158,6 +162,13 @@ impl Nct67xxSource {
         Self::read_temperatures(access, hwm_base, &chip_name, &mut readings);
         Self::read_fans(access, hwm_base, &chip_name, &mut readings);
         Self::read_temp_sources(access, hwm_base, &chip_name, &mut readings);
+
+        // Apply user/board label overrides
+        for (id, reading) in &mut readings {
+            if let Some(label) = self.label_overrides.get(&id.to_string()) {
+                reading.label = label.clone();
+            }
+        }
 
         readings
     }
@@ -209,7 +220,9 @@ impl Nct67xxSource {
         for &(reg, label) in &TEMP_REGS {
             if let Some(raw) = access.read_register(hwm_base, reg) {
                 let temp = raw as i8 as f64;
-                if temp == 0.0 || temp == -128.0 || temp > 127.0 {
+                // Filter disconnected inputs: 0, -128, 127 are NCT sentinel
+                // values, and temps outside -40..125°C are implausible.
+                if !(-40.0..125.0).contains(&temp) || temp == 0.0 {
                     continue;
                 }
 
@@ -235,7 +248,7 @@ impl Nct67xxSource {
         for &(reg, label) in &TEMP_EXTRA_REGS {
             if let Some(raw) = access.read_register(hwm_base, reg) {
                 let temp = raw as i8 as f64;
-                if temp == 0.0 || temp == -128.0 {
+                if !(-40.0..125.0).contains(&temp) || temp == 0.0 {
                     continue;
                 }
 

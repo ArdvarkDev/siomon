@@ -180,7 +180,7 @@ fn discover_all_sources(
         let mut nct_count = 0;
         let mut ite_count = 0;
         for chip in chips {
-            let nct_s = superio::nct67xx::Nct67xxSource::new(chip.clone());
+            let nct_s = superio::nct67xx::Nct67xxSource::new(chip.clone(), label_overrides);
             if nct_s.is_supported() {
                 nct_count += 1;
                 sources.push(Box::new(nct_s));
