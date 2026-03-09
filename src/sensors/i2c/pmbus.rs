@@ -23,6 +23,11 @@ const MUX_ADDR_LAST: u16 = 0x77;
 const VRM_ADDR_FIRST: u16 = 0x20;
 const VRM_ADDR_LAST: u16 = 0x4F;
 
+/// Maximum number of VRM devices to discover per bus (including mux channels).
+/// Real boards have at most ~16 VRM phases; more than that indicates
+/// false-positive detection on a bus with non-PMBus devices that ACK.
+const MAX_VRMS_PER_BUS: usize = 32;
+
 /// Sensor source for PMBus VRM controllers read via I2C/SMBus.
 pub struct PmbusSource {
     devices: Vec<PmbusDevice>,
@@ -210,7 +215,12 @@ impl PmbusSource {
 
 /// Scan the VRM address range (0x20-0x4F) on a single bus.
 fn scan_vrm_range(bus: u32, devices: &mut Vec<PmbusDevice>, vrm_index: &mut u32) {
+    let start_count = devices.len();
     for addr in VRM_ADDR_FIRST..=VRM_ADDR_LAST {
+        if devices.len() - start_count >= MAX_VRMS_PER_BUS {
+            log::warn!("PMBus: hit {MAX_VRMS_PER_BUS} device cap on bus {bus}, stopping scan");
+            break;
+        }
         let found = probe_pmbus_with_pages(bus, addr, vrm_index);
         for dev in found {
             log::info!(
@@ -311,6 +321,13 @@ fn probe_pmbus_with_pages(bus: u32, addr: u16, vrm_index: &mut u32) -> Vec<Pmbus
         }
 
         let vout_exponent = sign_extend_5bit(vout_mode & 0x1F);
+
+        // Real VRM controllers use negative exponents (-15 to -5) for sub-volt
+        // resolution. A non-negative exponent means multi-volt steps, which is
+        // not a real VRM — likely a non-PMBus device echoing register data.
+        if vout_exponent >= 0 {
+            continue;
+        }
 
         // Check VOUT — page is "active" if VOUT > 0
         let vout_raw = match dev.read_word_data(PMBUS_READ_VOUT) {
