@@ -170,7 +170,7 @@ fn run_loop(
     let mut active_alerts: Vec<String> = Vec::new();
 
     // View mode
-    let mut view_mode = ViewMode::Tree;
+    let mut view_mode = ViewMode::Dashboard;
 
     // Search/filter state
     let mut filter_mode = false;
