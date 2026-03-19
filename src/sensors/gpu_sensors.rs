@@ -260,13 +260,16 @@ fn poll_nvidia(
         }
 
         if let Ok(mem) = lib.device_memory_info(gpu.index) {
-            let id = sid("nvml", &chip, "vram_used");
-            let label = format!("{} VRAM Used", gpu.name);
-            let mb = mem.used as f64 / (1024.0 * 1024.0);
-            readings.push((
-                id,
-                SensorReading::new(label, mb, SensorUnit::Megabytes, SensorCategory::Memory),
-            ));
+            // Unified memory GPUs (e.g., NVIDIA GB10) report 0 for VRAM total.
+            if mem.total > 0 {
+                let id = sid("nvml", &chip, "vram_used");
+                let label = format!("{} VRAM Used", gpu.name);
+                let mb = mem.used as f64 / (1024.0 * 1024.0);
+                readings.push((
+                    id,
+                    SensorReading::new(label, mb, SensorUnit::Megabytes, SensorCategory::Memory),
+                ));
+            }
         }
     }
 }

@@ -571,14 +571,13 @@ pub fn memory_type_name(code: u8) -> &'static str {
         0x1B => "LPDDR",
         0x1C => "LPDDR2",
         0x1D => "LPDDR3",
-        0x1E => "DDR5",
-        0x1F => "LPDDR4",
-        0x20 => "Logical non-volatile device",
-        0x21 => "HBM",
-        0x22 => "LPDDR5",
-        0x23 => "HBM2",
+        0x1E => "LPDDR4",
+        0x1F => "Logical non-volatile device",
+        0x20 => "HBM",
+        0x21 => "HBM2",
+        0x22 => "DDR5",
+        0x23 => "LPDDR5",
         0x24 => "HBM3",
-        0x25 => "LPDDR5X",
         _ => "Unknown",
     }
 }
@@ -934,7 +933,7 @@ mod tests {
             formatted[9] = 0x20; // size high = 8192 MB = 8 GiB
             formatted[10] = 0x09; // DIMM
             formatted[12] = 1; // locator
-            formatted[14] = 0x1E; // DDR5
+            formatted[14] = 0x22; // DDR5
             formatted[17] = 0xC0; // speed low
             formatted[18] = 0x12; // speed high = 0x12C0 = 4800
             formatted[19] = 2; // manufacturer
@@ -971,7 +970,7 @@ mod tests {
         assert_eq!(result.memory_devices.len(), 1);
         let mem = &result.memory_devices[0];
         assert_eq!(mem.size_bytes, 8192u64 * 1024 * 1024);
-        assert_eq!(mem.memory_type, 0x1E); // DDR5
+        assert_eq!(mem.memory_type, 0x22); // DDR5
         assert_eq!(mem.speed_mts, Some(4800));
         assert_eq!(mem.manufacturer.as_deref(), Some("Micron"));
     }
@@ -991,9 +990,10 @@ mod tests {
     #[test]
     fn test_memory_type_name() {
         assert_eq!(memory_type_name(0x1A), "DDR4");
-        assert_eq!(memory_type_name(0x1E), "DDR5");
-        assert_eq!(memory_type_name(0x22), "LPDDR5");
-        assert_eq!(memory_type_name(0x25), "LPDDR5X");
+        assert_eq!(memory_type_name(0x1E), "LPDDR4");
+        assert_eq!(memory_type_name(0x22), "DDR5");
+        assert_eq!(memory_type_name(0x23), "LPDDR5");
+        assert_eq!(memory_type_name(0x24), "HBM3");
         assert_eq!(memory_type_name(0xFF), "Unknown");
     }
 
