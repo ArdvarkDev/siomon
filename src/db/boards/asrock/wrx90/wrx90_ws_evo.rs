@@ -1,4 +1,6 @@
-use super::super::{BoardTemplate, Platform};
+use crate::db::boards::{
+    BoardTemplate, Ddr5BusConfig, FEAT_DDR5, FeatureRequirements, Platform, Requirement,
+};
 
 pub static BOARD: BoardTemplate = BoardTemplate {
     match_substrings: &["wrx90"],
@@ -45,4 +47,16 @@ pub static BOARD: BoardTemplate = BoardTemplate {
     // No NCT6799 voltage scaling data yet
     nct_voltage_scaling: None,
     dimm_labels: &[],
+    ddr5_bus_config: Some(&Ddr5BusConfig {
+        i2c_buses: &[1, 2],
+        slots_per_bus: 4,
+    }),
+    requirements: FeatureRequirements {
+        entries: &[(
+            FEAT_DDR5,
+            &[Requirement::BiosSetting {
+                description: "Enable I2C/SPD passthrough in BIOS Advanced settings",
+            }],
+        )],
+    },
 };

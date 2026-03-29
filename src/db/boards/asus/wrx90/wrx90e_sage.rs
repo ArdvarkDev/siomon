@@ -1,4 +1,7 @@
-use super::super::{BoardTemplate, DimmSlotLabel, Platform};
+use crate::db::boards::{
+    BoardTemplate, Ddr5BusConfig, DimmSlotLabel, FEAT_DDR5, FeatureRequirements, Platform,
+    Requirement,
+};
 use crate::db::voltage_scaling;
 
 pub static BOARD: BoardTemplate = BoardTemplate {
@@ -121,4 +124,17 @@ pub static BOARD: BoardTemplate = BoardTemplate {
             label: "P0 Channel H DIMM 0 R1",
         },
     ],
+    ddr5_bus_config: Some(&Ddr5BusConfig {
+        i2c_buses: &[1, 2],
+        slots_per_bus: 4,
+    }),
+    requirements: FeatureRequirements {
+        entries: &[(
+            FEAT_DDR5,
+            &[Requirement::MinBiosVersion {
+                version: 1317,
+                hint: "Update ASUS WRX90E BIOS to >= 1317 to expose DDR5 I2C SPD addresses.",
+            }],
+        )],
+    },
 };

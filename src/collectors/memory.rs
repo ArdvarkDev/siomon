@@ -1,8 +1,9 @@
+use crate::db::boards::BoardTemplate;
 use crate::model::memory::{DimmInfo, MemoryInfo, MemoryType};
 use crate::parsers::smbios;
 use crate::platform::procfs;
 
-pub fn collect() -> MemoryInfo {
+pub fn collect(direct_io: bool, board: Option<&'static BoardTemplate>) -> MemoryInfo {
     let meminfo = procfs::parse_meminfo();
 
     let total_bytes = meminfo.get("MemTotal").copied().unwrap_or(0);
@@ -10,12 +11,23 @@ pub fn collect() -> MemoryInfo {
     let swap_total_bytes = meminfo.get("SwapTotal").copied().unwrap_or(0);
     let swap_free_bytes = meminfo.get("SwapFree").copied().unwrap_or(0);
 
-    let dimms = collect_dimms();
+    let mut dimms = collect_dimms();
     let populated_slots = if dimms.is_empty() {
         None
     } else {
         Some(dimms.len() as u32)
     };
+
+    // Enrich DIMMs with SPD EEPROM data on supported boards (requires --direct-io).
+    if let Some(b) = direct_io.then_some(board).flatten() {
+        if let Some(ddr5_config) = b.ddr5_bus_config {
+            enrich_dimms_with_spd(
+                &mut dimms,
+                ddr5_config,
+                b.requirements.get(crate::db::boards::FEAT_DDR5),
+            );
+        }
+    }
 
     MemoryInfo {
         total_bytes,
@@ -26,6 +38,43 @@ pub fn collect() -> MemoryInfo {
         total_slots: None,
         populated_slots,
         dimms,
+    }
+}
+
+/// Read SPD EEPROMs and match them to SMBIOS DIMM entries by serial number.
+fn enrich_dimms_with_spd(
+    dimms: &mut [DimmInfo],
+    ddr5_config: &crate::db::boards::Ddr5BusConfig,
+    ddr5_requirements: &[crate::db::boards::Requirement],
+) {
+    let spd_results = super::spd::read_ddr5_spd(ddr5_config, ddr5_requirements);
+    if spd_results.is_empty() {
+        return;
+    }
+
+    log::info!(
+        "SPD: enriching {} DIMM(s) with {} SPD result(s)",
+        dimms.len(),
+        spd_results.len()
+    );
+
+    for (spd_serial, spd_data) in spd_results {
+        // Match by serial number (SMBIOS stores as ASCII, SPD as 4-byte hex).
+        if let Some(dimm) = dimms.iter_mut().find(|d| {
+            d.serial_number
+                .as_ref()
+                .is_some_and(|sn| sn.eq_ignore_ascii_case(&spd_serial))
+        }) {
+            log::debug!(
+                "SPD: matched serial {} -> {} ({})",
+                spd_serial,
+                dimm.locator,
+                dimm.bank_locator.as_deref().unwrap_or("?")
+            );
+            dimm.spd = Some(spd_data);
+        } else {
+            log::debug!("SPD: no SMBIOS match for serial {}", spd_serial);
+        }
     }
 }
 
@@ -74,6 +123,7 @@ fn convert_smbios_devices(devices: &[smbios::MemoryDeviceEntry]) -> Vec<DimmInfo
                 total_width_bits: dev.total_width_bits,
                 ecc,
                 rank: dev.rank,
+                spd: None,
             })
         })
         .collect()
@@ -229,7 +279,10 @@ fn parse_memory_type(s: &str) -> MemoryType {
     }
 }
 
-pub struct MemoryCollector;
+pub struct MemoryCollector {
+    pub direct_io: bool,
+    pub board: Option<&'static crate::db::boards::BoardTemplate>,
+}
 
 impl crate::collectors::Collector for MemoryCollector {
     fn name(&self) -> &str {
@@ -237,7 +290,7 @@ impl crate::collectors::Collector for MemoryCollector {
     }
 
     fn collect_into(&self, info: &mut crate::model::system::SystemInfo) {
-        info.memory = collect();
+        info.memory = collect(self.direct_io, self.board);
     }
 }
 
@@ -289,6 +342,7 @@ impl DimmBuilder {
             total_width_bits: self.total_width_bits,
             ecc,
             rank: self.rank,
+            spd: None,
         })
     }
 }
