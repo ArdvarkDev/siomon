@@ -279,6 +279,20 @@ pub const NCT6799_HWMON_SCALING: &[(&str, f64)] = &[
     ("hwmon/nct6799/in4", 12.0), // +12V rail
 ];
 
+/// Generic SMBus probing can hard-lock some systems if we touch vendor muxes
+/// or kernel-owned devices. New boards must be explicitly opted in here after
+/// validation on real hardware.
+pub fn allows_unsafe_pmbus_probe(_board: Option<&BoardTemplate>) -> bool {
+    false
+}
+
+/// Generic SPD5118 probing on SMBus is intentionally disabled by default.
+/// Trusted kernel hwmon telemetry should win, and board-specific DDR5 direct
+/// probing already uses dedicated bus topology instead of blind SMBus scans.
+pub fn allows_unsafe_spd5118_probe(_board: Option<&BoardTemplate>) -> bool {
+    false
+}
+
 /// Common sensor labels shared across ASUS AM5 boards with NCT6798D.
 pub const ASUS_AM5_NCT6798_LABELS: &[(&str, &str)] = &[
     ("hwmon/nct6798/in0", "Vcore"),
@@ -387,6 +401,7 @@ static BOARDS: &[&BoardTemplate] = &[
     &asrock::am4::b450_gaming_itx::BOARD,
     &asrock::am4::a300m_deskmini::BOARD,
     // ASRock Intel
+    &asrock::z890::z890_nova_wifi::BOARD,
     &asrock::z390::z390_extreme4::BOARD,
     &asrock::z390::z390m_itx::BOARD,
     // Mini-PCs
@@ -633,6 +648,12 @@ mod tests {
     fn test_lookup_asrock_z390_extreme4() {
         let b = lookup_board_with_vendor("Z390 Extreme4", "ASRock").unwrap();
         assert!(b.description.contains("Z390 Extreme4"));
+    }
+
+    #[test]
+    fn test_lookup_asrock_z890_nova_wifi() {
+        let b = lookup_board_with_vendor("Z890 Nova WiFi", "ASRock").unwrap();
+        assert!(b.description.contains("Z890 Nova WiFi"));
     }
 
     #[test]
@@ -918,5 +939,11 @@ mod tests {
             )],
         };
         assert!(reqs.get("ddr6").is_empty());
+    }
+
+    #[test]
+    fn unsafe_i2c_probes_are_disabled_by_default() {
+        assert!(!allows_unsafe_pmbus_probe(None));
+        assert!(!allows_unsafe_spd5118_probe(None));
     }
 }

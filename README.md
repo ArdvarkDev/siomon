@@ -176,6 +176,16 @@ sio runs without root and gracefully degrades:
 
 Fields requiring elevation show `[requires root]` or are omitted.
 
+### Board Notes
+
+- **ASRock Z890 Nova WiFi** -- board fan telemetry is exposed by an NCT6686D-class companion controller. On current kernels this requires loading the in-tree `nct6683` hwmon driver with `force=1`:
+
+```bash
+sudo modprobe nct6683 force=1
+```
+
+  Once loaded, the board fans appear under `hwmon/nct6686`.
+
 ## Building
 
 ### Prerequisites

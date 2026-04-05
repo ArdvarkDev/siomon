@@ -114,6 +114,15 @@ mod tests {
     }
 
     #[test]
+    fn test_builtin_labels_asrock_z890_nova_nct6686() {
+        let (labels, _) = load_labels(Some("Z890 Nova WiFi"), &HashMap::new());
+        assert_eq!(labels.get("hwmon/nct6686/fan1").unwrap(), "CPU Fan 1");
+        assert_eq!(labels.get("hwmon/nct6686/fan2").unwrap(), "CPU Fan 2");
+        assert_eq!(labels.get("hwmon/nct6686/fan7").unwrap(), "AIO Pump");
+        assert_eq!(labels.get("hwmon/nct6686/fan8").unwrap(), "Water Pump");
+    }
+
+    #[test]
     fn test_builtin_labels_unknown_board() {
         let (labels, _) = load_labels(Some("Some Unknown Board"), &HashMap::new());
         assert!(labels.is_empty());
