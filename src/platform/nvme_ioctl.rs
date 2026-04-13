@@ -7,7 +7,6 @@ use std::fs::OpenOptions;
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
 
-
 /// NVMe Admin Command structure passed to the ioctl.
 #[repr(C)]
 #[derive(Default)]

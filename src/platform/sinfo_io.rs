@@ -19,8 +19,8 @@ use super::port_io::PortIo;
 
 const SINFO_IO_BATCH_MAX: usize = 32;
 
-const SINFO_IO_SETUP:      libc::Ioctl = libc::_IOW::<SinfoIoSetup>(b'S' as u32, 0x01);
-const SINFO_IO_READ_REG:   libc::Ioctl = libc::_IOWR::<SinfoIoReg>(b'S' as u32, 0x02);
+const SINFO_IO_SETUP: libc::Ioctl = libc::_IOW::<SinfoIoSetup>(b'S' as u32, 0x01);
+const SINFO_IO_READ_REG: libc::Ioctl = libc::_IOWR::<SinfoIoReg>(b'S' as u32, 0x02);
 const SINFO_IO_READ_BATCH: libc::Ioctl = libc::_IOWR::<SinfoIoBatch>(b'S' as u32, 0x03);
 
 // ── Kernel-matching structs ─────────────────────────────────────────────
