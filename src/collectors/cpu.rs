@@ -111,13 +111,13 @@ struct CpuidData {
 fn gather_cpuid() -> Option<CpuidData> {
     let cpuid = raw_cpuid::CpuId::new();
 
-    let vendor = match cpuid.get_vendor_info() {
-        Some(v) => match v.as_str() {
+    let vendor = {
+        let v = cpuid.get_vendor_info()?;
+        match v.as_str() {
             "GenuineIntel" => CpuVendor::Intel,
             "AuthenticAMD" => CpuVendor::Amd,
             other => CpuVendor::Unknown(other.to_string()),
-        },
-        None => return None,
+        }
     };
 
     let brand = cpuid
@@ -337,7 +337,7 @@ fn gather_arm_info(first_proc: Option<&HashMap<String, String>>) -> Option<ArmIn
     // Build brand and codename from all distinct core types.
     // Sort by max frequency descending so performance cores appear first.
     let mut sorted_types: Vec<_> = core_types.iter().collect();
-    sorted_types.sort_by(|a, b| b.max_freq_khz.cmp(&a.max_freq_khz));
+    sorted_types.sort_by_key(|b| std::cmp::Reverse(b.max_freq_khz));
 
     let implementer_name = arm_implementer_name(sorted_types[0].implementer);
 

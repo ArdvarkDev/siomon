@@ -138,20 +138,14 @@ fn parse_table(data: &[u8]) -> SmbiosData {
         }
 
         match struct_type {
-            0 => {
-                if result.bios.is_none() {
-                    result.bios = Some(parse_bios(structure_data, struct_len));
-                }
+            0 if result.bios.is_none() => {
+                result.bios = Some(parse_bios(structure_data, struct_len));
             }
-            1 => {
-                if result.system.is_none() {
-                    result.system = Some(parse_system(structure_data, struct_len));
-                }
+            1 if result.system.is_none() => {
+                result.system = Some(parse_system(structure_data, struct_len));
             }
-            2 => {
-                if result.baseboard.is_none() {
-                    result.baseboard = Some(parse_baseboard(structure_data, struct_len));
-                }
+            2 if result.baseboard.is_none() => {
+                result.baseboard = Some(parse_baseboard(structure_data, struct_len));
             }
             17 => {
                 if let Some(mem) = parse_memory_device(structure_data, struct_len) {
@@ -297,7 +291,7 @@ fn read_u32_le(data: &[u8], offset: usize) -> Option<u32> {
 
 /// Read a non-zero u16 value; returns `None` for 0 or 0xFFFF (unknown).
 fn read_u16_nonzero(data: &[u8], offset: usize) -> Option<u16> {
-    read_u16_le(data, offset).and_then(|v| if v == 0 || v == 0xFFFF { None } else { Some(v) })
+    read_u16_le(data, offset).filter(|&v| !(v == 0 || v == 0xFFFF))
 }
 
 // ---------------------------------------------------------------------------

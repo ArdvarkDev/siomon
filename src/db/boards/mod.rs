@@ -111,6 +111,8 @@ pub struct BoardTemplate {
     pub base_labels: Option<&'static [(&'static str, &'static str)]>,
     /// NCT6798/6799 voltage scaling table (18 channels).
     pub nct_voltage_scaling: Option<&'static [VoltageChannel; 18]>,
+    /// ITE87xx voltage scaling table (13 channels: VIN0-VIN12).
+    pub ite_voltage_scaling: Option<&'static [VoltageChannel; 13]>,
     /// DIMM slot topology mapping EDAC ranks to physical slot names.
     pub dimm_labels: &'static [DimmSlotLabel],
     /// DDR5 I2C bus topology for direct SPD/temperature probing.
@@ -279,6 +281,20 @@ pub const NCT6799_HWMON_SCALING: &[(&str, f64)] = &[
     ("hwmon/nct6799/in4", 12.0), // +12V rail
 ];
 
+/// Generic SMBus probing can hard-lock some systems if we touch vendor muxes
+/// or kernel-owned devices. New boards must be explicitly opted in here after
+/// validation on real hardware.
+pub fn allows_unsafe_pmbus_probe(_board: Option<&BoardTemplate>) -> bool {
+    false
+}
+
+/// Generic SPD5118 probing on SMBus is intentionally disabled by default.
+/// Trusted kernel hwmon telemetry should win, and board-specific DDR5 direct
+/// probing already uses dedicated bus topology instead of blind SMBus scans.
+pub fn allows_unsafe_spd5118_probe(_board: Option<&BoardTemplate>) -> bool {
+    false
+}
+
 /// Common sensor labels shared across ASUS AM5 boards with NCT6798D.
 pub const ASUS_AM5_NCT6798_LABELS: &[(&str, &str)] = &[
     ("hwmon/nct6798/in0", "Vcore"),
@@ -320,6 +336,7 @@ pub const MSI_AM4_NCT6795_LABELS: &[(&str, &str)] = &[
 
 /// All known board templates. First match wins.
 static BOARDS: &[&BoardTemplate] = &[
+    &asus::w890::w890e_sage::BOARD,
     // ASUS WRX90E must come before ASRock WRX90 (excludes WRX90E)
     &asus::wrx90::wrx90e_sage::BOARD,
     &asrock::wrx90::wrx90_ws_evo::BOARD,
@@ -387,6 +404,7 @@ static BOARDS: &[&BoardTemplate] = &[
     &asrock::am4::b450_gaming_itx::BOARD,
     &asrock::am4::a300m_deskmini::BOARD,
     // ASRock Intel
+    &asrock::z890::z890_nova_wifi::BOARD,
     &asrock::z390::z390_extreme4::BOARD,
     &asrock::z390::z390m_itx::BOARD,
     // Mini-PCs
@@ -409,7 +427,7 @@ fn read_board_vendor() -> Option<String> {
     ))
 }
 
-fn lookup_board_with_vendor(
+pub(crate) fn lookup_board_with_vendor(
     board_name: &str,
     board_vendor: &str,
 ) -> Option<&'static BoardTemplate> {
@@ -532,6 +550,15 @@ mod tests {
     }
 
     #[test]
+    fn test_lookup_asus_w890e_sage() {
+        let b = lookup_board_with_vendor("Pro WS W890E-SAGE SE", "ASUSTeK COMPUTER INC.").unwrap();
+        assert!(b.description.contains("W890E"));
+        assert!(b.ddr5_bus_config.is_some());
+        assert_eq!(b.ddr5_bus_config.unwrap().i2c_buses, &[0, 2]);
+        assert_eq!(b.ddr5_bus_config.unwrap().slots_per_bus, 4);
+    }
+
+    #[test]
     fn test_lookup_wrx90e_has_ddr5_config() {
         let b = lookup_board("Pro WS WRX90E-SAGE SE").unwrap();
         assert!(b.ddr5_bus_config.is_some());
@@ -633,6 +660,12 @@ mod tests {
     fn test_lookup_asrock_z390_extreme4() {
         let b = lookup_board_with_vendor("Z390 Extreme4", "ASRock").unwrap();
         assert!(b.description.contains("Z390 Extreme4"));
+    }
+
+    #[test]
+    fn test_lookup_asrock_z890_nova_wifi() {
+        let b = lookup_board_with_vendor("Z890 Nova WiFi", "ASRock").unwrap();
+        assert!(b.description.contains("Z890 Nova WiFi"));
     }
 
     #[test]
@@ -849,6 +882,7 @@ mod tests {
             ]),
             sensor_labels: &[("hwmon/nct6798/fan1", "My Fan")],
             nct_voltage_scaling: None,
+            ite_voltage_scaling: None,
             dimm_labels: &[],
             ddr5_bus_config: None,
             requirements: FeatureRequirements::NONE,
@@ -874,6 +908,7 @@ mod tests {
             base_labels: None,
             sensor_labels: &[("hwmon/nct6798/in0", "Vcore")],
             nct_voltage_scaling: None,
+            ite_voltage_scaling: None,
             dimm_labels: &[],
             ddr5_bus_config: None,
             requirements: FeatureRequirements::NONE,
@@ -918,5 +953,11 @@ mod tests {
             )],
         };
         assert!(reqs.get("ddr6").is_empty());
+    }
+
+    #[test]
+    fn unsafe_i2c_probes_are_disabled_by_default() {
+        assert!(!allows_unsafe_pmbus_probe(None));
+        assert!(!allows_unsafe_spd5118_probe(None));
     }
 }
